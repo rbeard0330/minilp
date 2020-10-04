@@ -421,6 +421,37 @@ impl Solution {
         self.solver.add_gomory_cut(var.0)?;
         Ok(self)
     }
+
+    /// Generate `SolutionLimitations` containing the non-basic variables and their coefficients
+    /// in the `Solution`.
+    /// Generally, non-basic variables are those that are constrained to their maximum or minimum
+    /// values in the solution. Relaxing the limitations on these variables could lead to a
+    /// better solution.
+    ///
+    /// See the documentation for `SolutionLimitations` for more information.
+    pub fn review_solution_limitations(&self) -> SolutionLimitations {
+        self.solver.get_nb_variables_and_coefficients()
+    }
+}
+
+/// Contains the non-basic `Limitations` in the source `Solution`. `Limitations` are divided into three categories.
+///
+/// `limitations_at_max` and `limitations_at_min` are sorted in decreasing order of the size of their coefficients.
+#[derive(Debug, Clone)]
+pub struct SolutionLimitations {
+    /// `Limitations` that can be adjusted without changing the value of the `Solution`
+    pub free_limitations: Vec<Limitation>,
+    /// `Limitations` that cannot be further increased without violating a limitation.
+    pub limitations_at_max: Vec<(Limitation, f64)>,
+    /// `Limitations` that cannot be further decreased without violating a limitation.
+    pub limitations_at_min: Vec<(Limitation, f64)>,
+}
+
+/// A limitation on a `Solution`.
+#[derive(Debug, Clone)]
+pub enum Limitation {
+    Variable(Variable),
+    Constraint(LinearExpr, ComparisonOp, f64),
 }
 
 impl std::ops::Index<Variable> for Solution {
@@ -642,5 +673,23 @@ mod tests {
         assert!(f64::abs(sol[v1] - 1.0) < 1e-8);
         assert_eq!(sol[v2], 1.0);
         assert_eq!(sol.objective(), -1.0);
+    }
+
+    #[test]
+    fn solution_limitations() {
+        let mut problem = Problem::new(OptimizationDirection::Maximize);
+        let v1 = problem.add_var(1.0, (0.0, f64::INFINITY));
+        let v2 = problem.add_var(1.0, (0.0, f64::INFINITY));
+        problem.add_constraint(&[(v1, 0.1), (v2, 1.0)], ComparisonOp::Le, 1.0);
+        problem.add_constraint(&[(v1, 10.0), (v2, 1.0)], ComparisonOp::Le, 10.0);
+
+        let sol = problem.solve().unwrap();
+        dbg!(&sol);
+        let SolutionLimitations {
+            free_limitations,
+            limitations_at_max,
+            limitations_at_min,
+        } = sol.review_solution_limitations();
+        dbg!(free_limitations, limitations_at_max, limitations_at_min);
     }
 }

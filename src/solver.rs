@@ -1,9 +1,4 @@
-use crate::{
-    helpers::{resized_view, to_dense},
-    lu::{lu_factorize, LUFactors, ScratchSpace},
-    sparse::{ScatteredVec, SparseMat, SparseVec},
-    ComparisonOp, CsVec, Error,
-};
+use crate::{helpers::{resized_view, to_dense}, lu::{lu_factorize, LUFactors, ScratchSpace}, sparse::{ScatteredVec, SparseMat, SparseVec}, ComparisonOp, CsVec, Error, Variable, SolutionLimitations, Limitation, LinearExpr};
 
 use sprs::CompressedStorage;
 
@@ -631,6 +626,68 @@ impl Solver {
 
         self.is_primal_feasible = false;
         self.restore_feasibility()
+    }
+
+    pub fn get_nb_variables_and_coefficients(&self) -> SolutionLimitations {
+        let mut free_vars = Vec::new();
+        let mut max_vars = Vec::new();
+        let mut min_vars = Vec::new();
+        for (counter, &var) in self
+            .var_states
+            .iter()
+            .enumerate()
+            .filter_map(|(var_counter, state)| match state {
+                    VarState::Basic(_) => None,
+                    VarState::NonBasic(idx) => Some((var_counter, idx))
+            })
+        {
+            let limitation = if counter < self.num_vars {
+                Limitation::Variable(Variable(var))
+            } else {
+                let comparison = if self.orig_var_mins[counter] == f64::NEG_INFINITY {
+                    ComparisonOp::Ge
+                } else if self.orig_var_maxs[counter] == f64::INFINITY {
+                    ComparisonOp::Le
+                } else {
+                    ComparisonOp::Eq
+                };
+                let (mut vars, mut coeffs): (Vec<usize>, Vec<f64>) = self.orig_constraints
+                    .outer_view(var)
+                    .unwrap()
+                    .iter()
+                    .map(|(index, &coeff)| (index, coeff))
+                    .unzip();
+                // Drop reference to slack variable
+                let target_len = vars.len() - 1;
+                vars.truncate(target_len);
+                coeffs.truncate(target_len);
+                let rhs = self.orig_rhs[var];
+                Limitation::Constraint(LinearExpr {
+                    vars,
+                    coeffs
+                }, comparison, rhs)
+            };
+            let coeff = self.nb_var_obj_coeffs[var];
+            if coeff < EPS {
+                free_vars.push(limitation);
+            } else {
+                if coeff < 0.0 {
+                    debug_assert!(self.nb_var_states[var].at_max);
+                    max_vars.push((limitation, coeff));
+                } else {
+                    debug_assert!(self.nb_var_states[var].at_min);
+                    min_vars.push((limitation, coeff));
+                }
+            }
+        }
+        min_vars.sort_unstable_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap());
+        max_vars.sort_unstable_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
+
+        SolutionLimitations {
+            free_limitations: free_vars,
+            limitations_at_max: max_vars,
+            limitations_at_min: min_vars
+        }
     }
 
     /// Number of infeasible basic vars and sum of their infeasibilities.
