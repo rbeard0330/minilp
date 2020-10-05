@@ -108,6 +108,24 @@ impl LinearExpr {
         self.vars.push(var.0);
         self.coeffs.push(coeff);
     }
+
+    /// Iterate over the components of the `LinearExpr` as pairs of coefficients and `Variables`.
+    pub fn as_pairs(&self) -> impl Iterator<Item=(f64, Variable)> + '_ {
+        self.coeffs
+            .iter()
+            .copied()
+            .zip(self.vars
+                .iter()
+                .map(|&idx| Variable(idx))
+            )
+    }
+}
+
+impl PartialEq for LinearExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_pairs().map(|(coeff, var)| (var, coeff)).collect::<HashMap<Variable, f64>>()
+            == other.as_pairs().map(|(coeff, var)| (var, coeff)).collect::<HashMap<Variable, f64>>()
+    }
 }
 
 /// A single `variable * constant` term in a linear expression.
@@ -158,7 +176,7 @@ impl std::iter::Extend<(Variable, f64)> for LinearExpr {
 }
 
 /// An operator specifying the relation between left-hand and right-hand sides of the constraint.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ComparisonOp {
     /// The == operator (equal to)
     Eq,
@@ -448,9 +466,11 @@ pub struct SolutionLimitations {
 }
 
 /// A limitation on a `Solution`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Limitation {
+    /// A `Variable` that is at its maximum or minimum value
     Variable(Variable),
+    /// A `Constraint` that has zero slack.
     Constraint(LinearExpr, ComparisonOp, f64),
 }
 
@@ -493,6 +513,8 @@ impl<'a> IntoIterator for &'a Solution {
 }
 
 pub use mps::MpsFile;
+use std::fmt::{Display, Formatter};
+use std::collections::{HashSet, HashMap};
 
 #[cfg(test)]
 mod tests {
