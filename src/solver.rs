@@ -1,4 +1,9 @@
-use crate::{helpers::{resized_view, to_dense}, lu::{lu_factorize, LUFactors, ScratchSpace}, sparse::{ScatteredVec, SparseMat, SparseVec}, ComparisonOp, CsVec, Error, Variable, SolutionLimitations, Limitation, LinearExpr};
+use crate::{
+    helpers::{resized_view, to_dense},
+    lu::{lu_factorize, LUFactors, ScratchSpace},
+    sparse::{ScatteredVec, SparseMat, SparseVec},
+    ComparisonOp, Constraint, CsVec, Error, LinearConstraint, LinearExpr, ShadowPrices,
+};
 
 use sprs::CompressedStorage;
 
@@ -52,7 +57,7 @@ pub(crate) struct Solver {
     row_coeffs: ScatteredVec,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 enum VarState {
     Basic(usize),
     NonBasic(usize),
@@ -628,31 +633,21 @@ impl Solver {
         self.restore_feasibility()
     }
 
-    pub fn get_nb_variables_and_coefficients(&self) -> SolutionLimitations {
-        let mut free_vars = Vec::new();
-        let mut max_vars = Vec::new();
-        let mut min_vars = Vec::new();
-        for (counter, &var) in self
-            .var_states
-            .iter()
-            .enumerate()
-            .filter_map(|(var_counter, state)| match state {
-                    VarState::Basic(_) => None,
-                    VarState::NonBasic(idx) => Some((var_counter, idx))
-            })
-        {
-            let limitation = if counter < self.num_vars {
-                Limitation::Variable(Variable(var))
-            } else {
-                let comparison = if self.orig_var_mins[counter] == f64::NEG_INFINITY {
+    pub fn get_shadow_prices(&self) -> ShadowPrices {
+        let mut shadow_prices = Vec::new();
+        for (constraint_index, &var_state) in self.var_states[self.num_vars..].iter().enumerate() {
+            let index = constraint_index + self.num_vars;
+            let constraint_expr = {
+                let comparison = if self.orig_var_mins[index] == f64::NEG_INFINITY {
                     ComparisonOp::Ge
-                } else if self.orig_var_maxs[counter] == f64::INFINITY {
+                } else if self.orig_var_maxs[index] == f64::INFINITY {
                     ComparisonOp::Le
                 } else {
                     ComparisonOp::Eq
                 };
-                let (mut vars, mut coeffs): (Vec<usize>, Vec<f64>) = self.orig_constraints
-                    .outer_view(var)
+                let (mut vars, mut coeffs): (Vec<usize>, Vec<f64>) = self
+                    .orig_constraints
+                    .outer_view(constraint_index)
                     .unwrap()
                     .iter()
                     .map(|(index, &coeff)| (index, coeff))
@@ -661,33 +656,16 @@ impl Solver {
                 let target_len = vars.len() - 1;
                 vars.truncate(target_len);
                 coeffs.truncate(target_len);
-                let rhs = self.orig_rhs[var];
-                Limitation::Constraint(LinearExpr {
-                    vars,
-                    coeffs
-                }, comparison, rhs)
+                let rhs = self.orig_rhs[constraint_index];
+                LinearConstraint(LinearExpr { vars, coeffs }, comparison, rhs)
             };
-            let coeff = self.nb_var_obj_coeffs[var];
-            if coeff < EPS {
-                free_vars.push(limitation);
-            } else {
-                if coeff < 0.0 {
-                    debug_assert!(self.nb_var_states[var].at_max);
-                    max_vars.push((limitation, coeff));
-                } else {
-                    debug_assert!(self.nb_var_states[var].at_min);
-                    min_vars.push((limitation, coeff));
-                }
-            }
+            let coeff = match var_state {
+                VarState::Basic(_) => 0.0,
+                VarState::NonBasic(index) => self.nb_var_obj_coeffs[index],
+            };
+            shadow_prices.push((constraint_expr, coeff));
         }
-        min_vars.sort_unstable_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap());
-        max_vars.sort_unstable_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
-
-        SolutionLimitations {
-            free_limitations: free_vars,
-            limitations_at_max: max_vars,
-            limitations_at_min: min_vars
-        }
+        ShadowPrices(shadow_prices)
     }
 
     /// Number of infeasible basic vars and sum of their infeasibilities.

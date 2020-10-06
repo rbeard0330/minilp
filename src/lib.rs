@@ -81,6 +81,20 @@ impl Variable {
     }
 }
 
+/// A reference to a constraint in a linear programming problem.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Constraint(pub(crate) usize);
+
+impl Constraint {
+    /// Sequence number of the constraint.
+    ///
+    /// Constraints are referenced by their number in the addition sequence. The method returns
+    /// this number.
+    pub fn idx(&self) -> usize {
+        self.0
+    }
+}
+
 /// A sum of variables multiplied by constant coefficients used as a left-hand side
 /// when defining constraints.
 #[derive(Clone, Debug)]
@@ -291,13 +305,14 @@ impl Problem {
     /// }
     /// problem.add_constraint(lhs, ComparisonOp::Ge, 2.0);
     /// ```
-    pub fn add_constraint(&mut self, expr: impl Into<LinearExpr>, cmp_op: ComparisonOp, rhs: f64) {
+    pub fn add_constraint(&mut self, expr: impl Into<LinearExpr>, cmp_op: ComparisonOp, rhs: f64) -> Constraint {
         let expr = expr.into();
         self.constraints.push((
             CsVec::new(self.obj_coeffs.len(), expr.vars, expr.coeffs),
             cmp_op,
             rhs,
         ));
+        Constraint(self.constraints.len() - 1)
     }
 
     /// Solve the problem, finding the optimal objective function value and variable values.
@@ -440,39 +455,32 @@ impl Solution {
         Ok(self)
     }
 
-    /// Generate `SolutionLimitations` containing the non-basic variables and their coefficients
-    /// in the `Solution`.
-    /// Generally, non-basic variables are those that are constrained to their maximum or minimum
-    /// values in the solution. Relaxing the limitations on these variables could lead to a
-    /// better solution.
+    /// Return a list of shadow prices associated with the constraints in the `Problem`.
     ///
-    /// See the documentation for `SolutionLimitations` for more information.
-    pub fn review_solution_limitations(&self) -> SolutionLimitations {
-        self.solver.get_nb_variables_and_coefficients()
+    /// See the documentation for `ShadowPrices` for more information.
+    pub fn shadow_prices(&self) -> ShadowPrices {
+        self.solver.get_shadow_prices()
     }
 }
 
-/// Contains the non-basic `Limitations` in the source `Solution`. `Limitations` are divided into three categories.
-///
-/// `limitations_at_max` and `limitations_at_min` are sorted in decreasing order of the size of their coefficients.
+/// Contains the shadow prices for each `Constraint` contained in the `Problem`. The shadow price is
+/// the amount by which the objective value of the solution would improve if the corresponding constraint
+/// were weakened by a small amount.
 #[derive(Debug, Clone)]
-pub struct SolutionLimitations {
-    /// `Limitations` that can be adjusted without changing the value of the `Solution`
-    pub free_limitations: Vec<Limitation>,
-    /// `Limitations` that cannot be further increased without violating a limitation.
-    pub limitations_at_max: Vec<(Limitation, f64)>,
-    /// `Limitations` that cannot be further decreased without violating a limitation.
-    pub limitations_at_min: Vec<(Limitation, f64)>,
+pub struct ShadowPrices(Vec<(LinearConstraint, f64)>);
+
+impl Index<Constraint> for ShadowPrices {
+    type Output = f64;
+
+    fn index(&self, index: Constraint) -> &Self::Output {
+        &self.0[index.0].1
+    }
 }
 
-/// A limitation on a `Solution`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Limitation {
-    /// A `Variable` that is at its maximum or minimum value
-    Variable(Variable),
-    /// A `Constraint` that has zero slack.
-    Constraint(LinearExpr, ComparisonOp, f64),
-}
+/// A
+#[derive(Debug, Clone)]
+pub struct LinearConstraint(pub LinearExpr, pub ComparisonOp, pub f64);
+
 
 impl std::ops::Index<Variable> for Solution {
     type Output = f64;
@@ -513,8 +521,8 @@ impl<'a> IntoIterator for &'a Solution {
 }
 
 pub use mps::MpsFile;
-use std::fmt::{Display, Formatter};
-use std::collections::{HashSet, HashMap};
+use std::collections::HashMap;
+use std::ops::Index;
 
 #[cfg(test)]
 mod tests {
@@ -698,20 +706,17 @@ mod tests {
     }
 
     #[test]
-    fn solution_limitations() {
+    fn shadow_prices() {
         let mut problem = Problem::new(OptimizationDirection::Maximize);
         let v1 = problem.add_var(1.0, (0.0, f64::INFINITY));
         let v2 = problem.add_var(1.0, (0.0, f64::INFINITY));
-        problem.add_constraint(&[(v1, 0.1), (v2, 1.0)], ComparisonOp::Le, 1.0);
-        problem.add_constraint(&[(v1, 10.0), (v2, 1.0)], ComparisonOp::Le, 10.0);
+        let c1 = problem.add_constraint(&[(v1, 2.0), (v2, 0.0)], ComparisonOp::Le, 1.0);
+        let c2 = problem.add_constraint(&[(v1, 0.0), (v2, 4.0)], ComparisonOp::Le, 10.0);
 
         let sol = problem.solve().unwrap();
-        dbg!(&sol);
-        let SolutionLimitations {
-            free_limitations,
-            limitations_at_max,
-            limitations_at_min,
-        } = sol.review_solution_limitations();
-        dbg!(free_limitations, limitations_at_max, limitations_at_min);
+        let shadow_prices = sol.shadow_prices();
+        assert_eq!(shadow_prices[c1], 0.5);
+        assert_eq!(shadow_prices[c2], 0.25);
+
     }
 }
