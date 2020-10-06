@@ -2,7 +2,7 @@ use crate::{
     helpers::{resized_view, to_dense},
     lu::{lu_factorize, LUFactors, ScratchSpace},
     sparse::{ScatteredVec, SparseMat, SparseVec},
-    ComparisonOp, Constraint, CsVec, Error, LinearConstraint, LinearExpr, ShadowPrices,
+    ComparisonOp, CsVec, Error, LinearConstraint, LinearExpr, ShadowPrices,
 };
 
 use sprs::CompressedStorage;

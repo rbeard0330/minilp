@@ -57,6 +57,8 @@ mod solver;
 mod sparse;
 
 use solver::Solver;
+use std::collections::HashMap;
+use std::ops::Index;
 
 /// An enum indicating whether to minimize or maximize objective function.
 #[derive(Clone, Copy, Debug)]
@@ -132,6 +134,24 @@ impl LinearExpr {
                 .iter()
                 .map(|&idx| Variable(idx))
             )
+    }
+
+    fn consolidate_duplicate_variables(self) -> Self {
+        let mut zipped = self.as_pairs().collect::<Vec<_>>();
+        zipped.sort_by_key(|item| (item.1).0);
+        zipped.into_iter().fold(Vec::new(), |mut acc, (coeff, var)| {
+                match acc.pop() {
+                    Some((last_var, last_coeff)) if last_var == var => {
+                        acc.push((last_var, coeff + last_coeff));
+                    },
+                    Some(last) => {
+                        acc.push(last);
+                        acc.push((var, coeff)); },
+                    None => {
+                        acc.push((var, coeff)); },
+                }
+                acc
+            }).into()
     }
 }
 
@@ -307,6 +327,18 @@ impl Problem {
     /// ```
     pub fn add_constraint(&mut self, expr: impl Into<LinearExpr>, cmp_op: ComparisonOp, rhs: f64) -> Constraint {
         let expr = expr.into();
+        self.constraints.push((
+            CsVec::new(self.obj_coeffs.len(), expr.vars, expr.coeffs),
+            cmp_op,
+            rhs,
+        ));
+        Constraint(self.constraints.len() - 1)
+    }
+
+    /// Add a linear constraint to the problem, after combining any duplicate variables present in
+    /// `expr`.  See `add_constraint` for more information.
+    pub fn add_constraint_checked(&mut self, expr: impl Into<LinearExpr>, cmp_op: ComparisonOp, rhs: f64) -> Constraint {
+        let expr = expr.into().consolidate_duplicate_variables();
         self.constraints.push((
             CsVec::new(self.obj_coeffs.len(), expr.vars, expr.coeffs),
             cmp_op,
@@ -527,8 +559,8 @@ impl<'a> IntoIterator for &'a Solution {
 }
 
 pub use mps::MpsFile;
-use std::collections::HashMap;
-use std::ops::Index;
+
+
 
 #[cfg(test)]
 mod tests {
@@ -735,5 +767,25 @@ mod tests {
         assert_eq!(shadow_prices[c1], -0.5);
         assert_eq!(shadow_prices[c2], -0.25);
 
+    }
+
+    #[test]
+    fn consolidate_duplicates() {
+        let mut problem = Problem::new(OptimizationDirection::Maximize);
+        for _ in 0..5 {
+            problem.add_var(-1.0, (0.0, f64::INFINITY));
+            problem.add_var(1.0, (0.0, f64::INFINITY));
+        }
+        let mut no_dups = LinearExpr::empty();
+        for i in 0..10 {
+            no_dups.add(Variable(i), i as f64 * 1.0);
+        }
+        let mut dups = LinearExpr::empty();
+        for i in 0..10 {
+            dups.add(Variable(i), i as f64 * 1.5);
+            dups.add(Variable(i), i as f64 * -0.5);
+        }
+        let deduped = dups.consolidate_duplicate_variables();
+        assert_eq!(no_dups, deduped);
     }
 }
