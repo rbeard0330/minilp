@@ -724,5 +724,16 @@ mod tests {
         assert_eq!(shadow_prices[c1], 0.5);
         assert_eq!(shadow_prices[c2], 0.25);
 
+        let mut problem = Problem::new(OptimizationDirection::Minimize);
+        let v1 = problem.add_var(1.0, (0.0, f64::INFINITY));
+        let v2 = problem.add_var(1.0, (0.0, f64::INFINITY));
+        let c1 = problem.add_constraint(&[(v1, 2.0), (v2, 0.0)], ComparisonOp::Ge, 1.0);
+        let c2 = problem.add_constraint(&[(v1, 0.0), (v2, 4.0)], ComparisonOp::Ge, 10.0);
+
+        let sol = problem.solve().unwrap();
+        let shadow_prices = sol.shadow_prices();
+        assert_eq!(shadow_prices[c1], -0.5);
+        assert_eq!(shadow_prices[c2], -0.25);
+
     }
 }
