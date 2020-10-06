@@ -469,6 +469,13 @@ impl Solution {
 #[derive(Debug, Clone)]
 pub struct ShadowPrices(Vec<(LinearConstraint, f64)>);
 
+impl ShadowPrices {
+    /// Iterate over `LinearConstraints` and their corresponding shadow prices.
+    pub fn as_pairs(&self) -> impl Iterator<Item=&(LinearConstraint, f64)> + '_ {
+        self.0.iter()
+    }
+}
+
 impl Index<Constraint> for ShadowPrices {
     type Output = f64;
 
@@ -477,10 +484,9 @@ impl Index<Constraint> for ShadowPrices {
     }
 }
 
-/// A
+/// Both sides of a linear constraint.
 #[derive(Debug, Clone)]
 pub struct LinearConstraint(pub LinearExpr, pub ComparisonOp, pub f64);
-
 
 impl std::ops::Index<Variable> for Solution {
     type Output = f64;
